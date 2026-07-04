@@ -71,3 +71,43 @@ def team_game_logs(seasons: list[str], season_type: str = "Regular Season") -> p
     frames = [league_game_log(s, season_type) for s in seasons]
     out = pd.concat(frames, ignore_index=True)
     return out
+
+
+def shot_chart(season: str, season_type: str = "Regular Season") -> pd.DataFrame:
+    """Every field-goal attempt league-wide for a season (~100k rows), cached.
+
+    Uses ShotChartDetail with team_id=0/player_id=0 to pull all shooters at once.
+    Note: this endpoint has NO defender-distance, shot-clock, or score-margin
+    fields -- see the Phase 2 README for how that limits the model.
+    """
+    safe_type = season_type.replace(" ", "_").lower()
+    cache = _cache_path(f"shot_chart_{season}_{safe_type}.csv")
+
+    if cache.exists():
+        return pd.read_csv(cache, dtype={"GAME_ID": str})
+
+    from nba_api.stats.endpoints import shotchartdetail
+
+    print(f"[nba_data] fetching ShotChartDetail {season} ({season_type})...")
+    resp = shotchartdetail.ShotChartDetail(
+        team_id=0,
+        player_id=0,
+        season_nullable=season,
+        season_type_all_star=season_type,
+        context_measure_simple="FGA",  # all field-goal attempts
+    )
+    df = resp.get_data_frames()[0]
+    time.sleep(API_SLEEP_SECONDS)  # be polite to the API
+
+    df.to_csv(cache, index=False)
+    return df
+
+
+def shot_charts(seasons: list[str], season_type: str = "Regular Season") -> pd.DataFrame:
+    """Concatenate ShotChartDetail for several seasons into one long table."""
+    frames = []
+    for s in seasons:
+        df = shot_chart(s, season_type)
+        df["SEASON"] = s  # tag each shot with its season for time-based splits
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)

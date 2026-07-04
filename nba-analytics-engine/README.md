@@ -81,6 +81,22 @@ redundant and dropped.
 |:---:|:---:|:---:|:---:|:---:|
 | 52.7% | 53.9% | 55.8% | 59.8% | 62.6% |
 
+### A COVID natural experiment (home crowds)
+
+Part of 2019-20 (the Orlando "bubble") and much of 2020-21 were played in empty or
+reduced-capacity arenas. If home-court advantage is partly a *crowd* effect, home
+win% should dip in exactly those seasons — and it does:
+
+| 2015-16 → 2018-19 | 2019-20 | 2020-21 | 2021-22 | 2022-23 | 2023-24 | 2024-25 |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **58.6%** (avg) | 55.1% | 54.4% | 54.4% | 58.1% | 54.3% | 54.5% |
+
+Home win% falls ~4.5 points in the empty-arena seasons — direct, if circumstantial,
+evidence of the crowd's contribution to home advantage, detected inside our own
+pipeline with no extra data. The honest caveat: it never fully rebounds to the
+pre-COVID ~59%, so a broader league-wide decline in home-court advantage is also at
+work — the crowd effect is real but not the whole story.
+
 ### Lessons learned
 
 - A single `LeagueGameLog` call per season is far more polite (and faster) than
@@ -94,6 +110,11 @@ redundant and dropped.
 
 Predicts the probability a field-goal attempt goes in, from **512,000 shots**
 across 5 seasons (2020-21 → 2024-25) of league-wide `shotchartdetail` data.
+
+> The COVID-affected 2020-21 season is kept deliberately. Empty arenas plausibly
+> affect *game outcomes* (see the Phase 1 crowd analysis) but there's little reason
+> a *shot's* make probability given its location changes with crowd size, so it's
+> fair training data here — and dropping ~100k shots would cost more than it buys.
 
 **Run it:**
 

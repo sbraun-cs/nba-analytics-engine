@@ -7,7 +7,7 @@ models of escalating difficulty:
 |-------|-------|--------|
 | 1 | Game outcome predictor (logistic regression) | ✅ Complete |
 | 2 | Shot quality model — xFG% (XGBoost) | ✅ Complete |
-| 3 | Live win-probability model + Streamlit dashboard (PyTorch) | 🔨 In progress (parser) |
+| 3 | Live win-probability model + Streamlit dashboard (PyTorch) | 🔨 In progress (baseline + dashboard) |
 
 All data is pulled from the public `nba_api`, cached locally under `data/` (never
 committed), and every model is evaluated against an honest naive baseline with a
@@ -166,6 +166,19 @@ Predicts P(home win) at each moment of a game from live game state. Built
 incrementally per the brief: the play-by-play **parser is validated on a single
 game first**, and the train/test split is proven leak-free, before any
 season-wide pull or model training.
+
+### Live replay dashboard
+
+![Win probability replay](docs/phase3_winprob_replay.gif)
+
+A Streamlit app replays a historical game with a live-updating win-probability
+curve. The game shown is chosen automatically as the test game with the **biggest
+4th-quarter swing** — here BOS erasing a 90%+ PHI win probability to win 118-110.
+
+```bash
+streamlit run src/phase3/dashboard.py      # needs cached play-by-play in data/
+python -m src.phase3.make_gif              # regenerate the GIF above
+```
 
 - **Data:** `PlayByPlayV3` (the older `playbyplayv2` is deprecated — the NBA API
   now returns empty JSON for it), fetched and cached one game at a time.

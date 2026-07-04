@@ -81,6 +81,68 @@ def build_dataset(ids: list[str]) -> pd.DataFrame:
     return data.dropna(subset=FEATURES).reset_index(drop=True)
 
 
+def train_model(train_ids: list[str] | None = None):
+    """Fit the logistic win-prob model (reused by the dashboard and GIF)."""
+    if train_ids is None:
+        train_ids, _ = sampled_split()
+    train = build_dataset(train_ids)
+    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+    model.fit(train[FEATURES], train["home_win"])
+    return model
+
+
+def _elapsed_seconds(period: int, secs_left_period: float) -> float:
+    """Monotonic seconds since tip-off (handles OT), for a left-to-right time axis."""
+    if period <= 4:
+        return (period - 1) * 720 + (720 - secs_left_period)
+    return 2880 + (period - 5) * 300 + (300 - secs_left_period)
+
+
+def game_curve(model, game_id: str) -> pd.DataFrame:
+    """Per-event win-probability curve for one game (predicted P(home win))."""
+    df = build_dataset([game_id]).copy()
+    df["win_prob"] = model.predict_proba(df[FEATURES])[:, 1]
+    df["secs_elapsed"] = [
+        _elapsed_seconds(p, s) for p, s in zip(df["period"], df["secs_left_period"])
+    ]
+    df["minutes_elapsed"] = df["secs_elapsed"] / 60.0
+    return df.sort_values("secs_elapsed").reset_index(drop=True)
+
+
+def q4_swing(model, game_id: str) -> float:
+    """Range (max - min) of the win-prob curve during the 4th quarter."""
+    df = game_curve(model, game_id)
+    q4 = df[df["period"] == 4]
+    if len(q4) < 2:
+        return 0.0
+    return float(q4["win_prob"].max() - q4["win_prob"].min())
+
+
+def find_demo_game(model=None, test_ids: list[str] | None = None):
+    """Return (game_id, swing) for the test game with the biggest 4th-quarter swing."""
+    if model is None:
+        model = train_model()
+    if test_ids is None:
+        _, test_ids = sampled_split()
+    best_id, best_swing = None, -1.0
+    for g in test_ids:
+        try:
+            swing = q4_swing(model, g)
+        except Exception:
+            continue
+        if swing > best_swing:
+            best_id, best_swing = g, swing
+    return best_id, best_swing
+
+
+def game_teams(game_id: str) -> tuple[str, str]:
+    """(home_tricode, away_tricode) for a game, read from its cached play-by-play."""
+    raw = play_by_play(game_id)
+    home = raw.loc[raw["location"] == "h", "teamTricode"].dropna().iloc[0]
+    away = raw.loc[raw["location"] == "v", "teamTricode"].dropna().iloc[0]
+    return home, away
+
+
 def calibration_by_period(test: pd.DataFrame, prob: np.ndarray) -> pd.DataFrame:
     """Mean predicted vs. actual home-win rate, bucketed by period."""
     t = test.copy()
@@ -130,6 +192,17 @@ def main():
               f"({len(train_ids)} train + {len(test_ids)} test)...", flush=True)
         pull(all_ids)
         print("Pull complete.")
+        return
+
+    if cmd == "demo":
+        model = train_model(train_ids)
+        game_id, swing = find_demo_game(model, test_ids)
+        home, away = game_teams(game_id)
+        curve = game_curve(model, game_id)
+        print(f"Biggest 4th-quarter swing: game {game_id} ({away} @ {home}), "
+              f"Q4 swing = {swing:.3f}")
+        print(f"Final: {home} {curve['score_home'].iloc[-1]} - "
+              f"{curve['score_away'].iloc[-1]} {away}")
         return
 
     print(f"Building dataset from {len(train_ids)} train + {len(test_ids)} test games...")

@@ -176,6 +176,31 @@ season-wide pull or model training.
   whole game is the atomic unit, no game's events are ever split across train and
   test — enforced by an assertion that the train/test `GAME_ID` sets are disjoint.
 
+### Baseline results (logistic regression)
+
+Trained on 300 sampled games from 2022-23 + 2023-24 (143,603 events), tested on
+150 sampled 2024-25 games (72,290 events).
+
+| Model | Log loss | ROC-AUC |
+|-------|----------|---------|
+| **Naive baseline** (constant base rate) | 0.695 | 0.500 |
+| Logistic (core features) | **0.454** | **0.860** |
+
+The high AUC is expected, not leakage: late-game events (large margin, seconds
+left) are trivially predictable, so a win-prob model pooled over all events scores
+high by construction. An urgency-weighted margin (`margin_urgency = margin /
+(minutes_left + 1)`) dominates; the `home_event` possession proxy has a coefficient
+near zero.
+
+**Error analysis (does more state pay rent?).** Calibration is good in the fourth
+quarter but the model *over-predicts* the home team early in games. The cause isn't
+missing foul/timeout state — it's that home-court advantage was higher in the
+training seasons than in the 2024-25 test season (the same decline documented in the
+Phase 1 analysis), so the intercept is too home-friendly early. Conclusion: **bonus
+state, timeouts, and true possession are not worth adding** (the possession proxy
+already contributes ~nothing). What *would* help is a pregame team-strength prior —
+which is exactly the stretch below.
+
 ### Stretch idea (v2, after the dashboard works): reuse Phase 1 as a prior
 
 A pure in-game win-probability model starts *every* game near 50/50, ignoring who

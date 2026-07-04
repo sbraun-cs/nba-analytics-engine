@@ -111,3 +111,31 @@ def shot_charts(seasons: list[str], season_type: str = "Regular Season") -> pd.D
         df["SEASON"] = s  # tag each shot with its season for time-based splits
         frames.append(df)
     return pd.concat(frames, ignore_index=True)
+
+
+def play_by_play(game_id: str) -> pd.DataFrame:
+    """Raw event log for a single game (PlayByPlayV3), cached per game.
+
+    Uses V3 because the NBA API no longer returns data for the older
+    PlayByPlayV2 endpoint (it responds with empty JSON). V3 also exposes the
+    running score (scoreHome/scoreAway) and an 'h'/'v' location flag directly.
+
+    Phase 3 data is large, so this fetches ONE game at a time and caches it;
+    the parser is built and validated on a single game before any season-wide
+    pull (see CLAUDE.md Phase 3).
+    """
+    game_id = str(game_id).zfill(10)  # GAME_IDs are 10-char zero-padded strings
+    cache = _cache_path(f"pbp_{game_id}.csv")
+
+    if cache.exists():
+        return pd.read_csv(cache, dtype={"gameId": str})
+
+    from nba_api.stats.endpoints import playbyplayv3
+
+    print(f"[nba_data] fetching PlayByPlayV3 for game {game_id}...")
+    resp = playbyplayv3.PlayByPlayV3(game_id=game_id)
+    df = resp.get_data_frames()[0]
+    time.sleep(API_SLEEP_SECONDS)  # be polite to the API
+
+    df.to_csv(cache, index=False)
+    return df

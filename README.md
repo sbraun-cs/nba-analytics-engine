@@ -7,7 +7,7 @@ models of escalating difficulty:
 |-------|-------|--------|
 | 1 | Game outcome predictor (logistic regression) | ✅ Complete |
 | 2 | Shot quality model — xFG% (XGBoost) | ✅ Complete |
-| 3 | Live win-probability model + Streamlit dashboard (PyTorch) | ⬜ Planned |
+| 3 | Live win-probability model + Streamlit dashboard (PyTorch) | 🔨 In progress (parser) |
 
 All data is pulled from the public `nba_api`, cached locally under `data/` (never
 committed), and every model is evaluated against an honest naive baseline with a
@@ -159,3 +159,28 @@ red flag.
 - Shot-zone (especially the restricted area) and distance dominate importance;
   the missing defender/shot-clock fields are the real accuracy ceiling, and
   naming that limitation honestly matters more than squeezing out AUC.
+
+## Phase 3 — Win probability model + dashboard (in progress)
+
+Predicts P(home win) at each moment of a game from live game state. Built
+incrementally per the brief: the play-by-play **parser is validated on a single
+game first**, and the train/test split is proven leak-free, before any
+season-wide pull or model training.
+
+- **Data:** `PlayByPlayV3` (the older `playbyplayv2` is deprecated — the NBA API
+  now returns empty JSON for it), fetched and cached one game at a time.
+- **Core features per event:** `score_margin`, `secs_left_game`, `period`,
+  `is_ot`, and `home_event` (a possession-side proxy). A logistic model is the
+  baseline before any neural net.
+- **Split:** whole games grouped by season (latest season = test). Because a
+  whole game is the atomic unit, no game's events are ever split across train and
+  test — enforced by an assertion that the train/test `GAME_ID` sets are disjoint.
+
+### Stretch idea (v2, after the dashboard works): reuse Phase 1 as a prior
+
+A pure in-game win-probability model starts *every* game near 50/50, ignoring who
+is playing. The plan is to feed **Phase 1's pregame features** (rolling scoring-
+margin difference, rest) into Phase 3 as prior features, so a strong team vs. a
+weak team opens where it should instead of a coin flip. That turns three separate
+projects into **one engine** — the game-level model becomes the prior for the
+event-level model — which is the whole point of the repo's name.

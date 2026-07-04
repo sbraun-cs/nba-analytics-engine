@@ -6,7 +6,7 @@ models of escalating difficulty:
 | Phase | Model | Status |
 |-------|-------|--------|
 | 1 | Game outcome predictor (logistic regression) | ✅ Complete |
-| 2 | Shot quality model — xFG% (XGBoost) | ⬜ Planned |
+| 2 | Shot quality model — xFG% (XGBoost) | ✅ Complete |
 | 3 | Live win-probability model + Streamlit dashboard (PyTorch) | ⬜ Planned |
 
 All data is pulled from the public `nba_api`, cached locally under `data/` (never
@@ -25,7 +25,7 @@ data/           cached API pulls (gitignored)
 ## Setup
 
 ```bash
-pip install nba_api pandas scikit-learn seaborn matplotlib jupyter
+pip install nba_api pandas scikit-learn xgboost seaborn matplotlib jupyter
 ```
 
 ## Phase 1 — Game predictor
@@ -89,3 +89,52 @@ redundant and dropped.
   redundant. Extra features (ratings, back-to-back) gave a small, honest lift.
 - Getting the `shift(1)`-then-`rolling` order right — and guarding it with an
   assertion — is the whole ballgame for avoiding leakage.
+
+## Phase 2 — Shot quality model (xFG%)
+
+Predicts the probability a field-goal attempt goes in, from **512,000 shots**
+across 5 seasons (2020-21 → 2024-25) of league-wide `shotchartdetail` data.
+
+**Run it:**
+
+```bash
+python -m src.phase2.shot_quality       # fetches (once) + trains + reports
+jupyter notebook notebooks/phase2.ipynb  # shot chart + calibration
+```
+
+### Data limitation (important)
+
+The public `shotchartdetail` endpoint does **not** expose **defender distance,
+shot-clock, or score margin** for these seasons — the three signals that would
+most improve a shot-difficulty model. Rather than fake them, the model uses only
+what the endpoint actually provides:
+
+- `shot_distance`, `loc_x`, `loc_y`, and a derived `shot_angle`
+- `is_three`, `period`, `time_remaining_sec` (game clock)
+- one-hot `SHOT_ZONE_BASIC` and the 15 most common `ACTION_TYPE`s (layup, jumper,
+  dunk, …)
+
+### Results
+
+XGBoost, trained on 2020-21 → 2023-24 (409,600 shots), tested on the held-out
+2024-25 season (102,400 shots).
+
+| Model | Log loss | ROC-AUC |
+|-------|----------|---------|
+| **Naive baseline** (league-average 46.6%) | 0.691 | 0.500 |
+| XGBoost xFG% | **0.640** | **0.657** |
+
+A meaningful but modest lift, and well calibrated (predicted probabilities track
+observed make rates closely). At-rim shots average a predicted ~0.66 make
+probability versus ~0.36 for threes — the model recovers the shape of shot value
+from geometry alone. The mid-0.60s AUC is the honest ceiling for a public-data
+model without defender or shot-clock context; a much higher number would be a
+red flag.
+
+### Lessons learned
+
+- One `ShotChartDetail` call with `team_id=0, player_id=0` pulls an entire
+  season league-wide (~100k shots) — 5 calls for 5 seasons.
+- Shot-zone (especially the restricted area) and distance dominate importance;
+  the missing defender/shot-clock fields are the real accuracy ceiling, and
+  naming that limitation honestly matters more than squeezing out AUC.

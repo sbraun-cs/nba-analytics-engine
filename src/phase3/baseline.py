@@ -13,6 +13,7 @@ Two entry points:
 from __future__ import annotations
 
 import sys
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.ingest.nba_data import league_game_log, play_by_play
+from src.phase1.game_predictor import build_game_table
 from src.phase3.win_prob import assert_no_game_overlap, parse_game
 
 # --- sampling configuration (modest first pull) ------------------------------
@@ -34,6 +36,21 @@ SEED = 0
 # margin_urgency: a lead is worth more with less time left. score_margin divided
 # by (minutes remaining + 1) so it grows from ~0 early to the raw margin at 0:00.
 FEATURES = ["score_margin", "secs_left_game", "margin_urgency", "is_ot", "home_event"]
+
+# Phase 1 pregame prior: rolling scoring-margin diffs, rest advantage, rating diffs.
+# These come from Phase 1's build_game_table, whose rolling features use only PAST
+# games (shift(1) within team-season), so joining them by game_id is leak-free --
+# a game's prior sees only earlier games, never itself. See the README.
+PRIOR_SEASONS = TRAIN_SEASONS + [TEST_SEASON]
+PRIOR_FEATURES = ["d_pts", "d_pts_allowed", "d_rest", "d_off_rating", "d_def_rating"]
+ALL_FEATURES = FEATURES + PRIOR_FEATURES
+
+
+@lru_cache(maxsize=1)
+def prior_table() -> pd.DataFrame:
+    """game_id -> Phase 1 pregame feature diffs (built once; leak-free by shift)."""
+    g = build_game_table(list(PRIOR_SEASONS))
+    return g.set_index("game_id")[PRIOR_FEATURES]
 
 
 def sample_ids(season: str, n: int, seed: int) -> list[str]:
@@ -68,7 +85,7 @@ def pull(ids: list[str]) -> None:
 
 
 def build_dataset(ids: list[str]) -> pd.DataFrame:
-    """Parse every cached game into one per-event feature table."""
+    """Parse every cached game into one per-event feature table (+ pregame prior)."""
     frames = []
     for g in ids:
         try:
@@ -78,17 +95,26 @@ def build_dataset(ids: list[str]) -> pd.DataFrame:
     data = pd.concat(frames, ignore_index=True)
     minutes_left = data["secs_left_game"] / 60.0
     data["margin_urgency"] = data["score_margin"] / (minutes_left + 1.0)
+
+    # Join the Phase 1 pregame prior by game_id. Early-season games have no prior
+    # (too few prior games in Phase 1) -> fill 0.0, i.e. a neutral pregame edge.
+    data = data.join(prior_table(), on="game_id")
+    data[PRIOR_FEATURES] = data[PRIOR_FEATURES].fillna(0.0)
     return data.dropna(subset=FEATURES).reset_index(drop=True)
 
 
-def train_model(train_ids: list[str] | None = None):
-    """Fit the logistic win-prob model (reused by the dashboard and GIF)."""
+def fit_logistic(train: pd.DataFrame, features: list[str]):
+    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+    model.fit(train[features], train["home_win"])
+    return model
+
+
+def train_model(train_ids: list[str] | None = None, features: list[str] | None = None):
+    """Fit the win-prob model (defaults to core+prior; reused by dashboard and GIF)."""
+    features = features or ALL_FEATURES
     if train_ids is None:
         train_ids, _ = sampled_split()
-    train = build_dataset(train_ids)
-    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
-    model.fit(train[FEATURES], train["home_win"])
-    return model
+    return fit_logistic(build_dataset(train_ids), features)
 
 
 def _elapsed_seconds(period: int, secs_left_period: float) -> float:
@@ -98,10 +124,11 @@ def _elapsed_seconds(period: int, secs_left_period: float) -> float:
     return 2880 + (period - 5) * 300 + (300 - secs_left_period)
 
 
-def game_curve(model, game_id: str) -> pd.DataFrame:
+def game_curve(model, game_id: str, features: list[str] | None = None) -> pd.DataFrame:
     """Per-event win-probability curve for one game (predicted P(home win))."""
+    features = features or ALL_FEATURES
     df = build_dataset([game_id]).copy()
-    df["win_prob"] = model.predict_proba(df[FEATURES])[:, 1]
+    df["win_prob"] = model.predict_proba(df[features])[:, 1]
     df["secs_elapsed"] = [
         _elapsed_seconds(p, s) for p, s in zip(df["period"], df["secs_left_period"])
     ]
@@ -194,32 +221,49 @@ def calibration_by_period(test: pd.DataFrame, prob: np.ndarray) -> pd.DataFrame:
     return g
 
 
-def evaluate(train: pd.DataFrame, test: pd.DataFrame) -> None:
-    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
-    model.fit(train[FEATURES], train["home_win"])
-    prob = model.predict_proba(test[FEATURES])[:, 1]
-
-    ll = log_loss(test["home_win"], prob)
-    auc = roc_auc_score(test["home_win"], prob)
-
-    # Naive baseline: predict the training base rate for every event.
+def report_before_after(train: pd.DataFrame, test: pd.DataFrame) -> None:
+    """Compare the core model vs. core+prior on log loss, AUC, and calibration."""
     base = train["home_win"].mean()
     base_ll = log_loss(test["home_win"], np.full(len(test), base))
+    print(f"\ntrain events {len(train):,} ({train['game_id'].nunique()} games) | "
+          f"test events {len(test):,} ({test['game_id'].nunique()} games) | "
+          f"naive baseline log loss {base_ll:.4f}")
 
-    print("\n=== Logistic win-probability baseline ===")
-    print(f"  train events : {len(train):,}  (games: {train['game_id'].nunique()})")
-    print(f"  test events  : {len(test):,}  (games: {test['game_id'].nunique()})")
-    print(f"  base rate    : {base:.4f}")
-    print(f"  log loss     : {ll:.4f}   (naive baseline {base_ll:.4f})")
-    print(f"  ROC-AUC      : {auc:.4f}")
+    variants = {"core": FEATURES, "core+prior": ALL_FEATURES}
+    preds = {}
+    print(f"\n{'model':<12}{'log loss':>10}{'ROC-AUC':>10}")
+    for label, feats in variants.items():
+        model = fit_logistic(train, feats)
+        p = model.predict_proba(test[feats])[:, 1]
+        preds[label] = p
+        print(f"{label:<12}{log_loss(test['home_win'], p):>10.4f}"
+              f"{roc_auc_score(test['home_win'], p):>10.4f}")
 
-    coefs = pd.Series(model.named_steps["logisticregression"].coef_[0], index=FEATURES)
-    print("  coefficients :")
-    for name, val in coefs.sort_values(key=abs, ascending=False).items():
-        print(f"    {name:<15} {val:+.4f}")
+    print("\nEarly-game calibration by period (mean predicted vs actual home-win rate):")
+    cal = calibration_by_period(test, preds["core"]).rename(
+        columns={"mean_pred": "core_pred"})
+    cal["prior_pred"] = calibration_by_period(test, preds["core+prior"])["mean_pred"]
+    print(cal[["events", "actual", "core_pred", "prior_pred"]].round(4).to_string())
 
-    print("\n  calibration by period (mean predicted vs actual home-win rate):")
-    print(calibration_by_period(test, prob).round(4).to_string())
+    _blend_check(test, preds["core"], preds["core+prior"])
+
+
+def _blend_check(test, p_core, p_prior) -> None:
+    """Show the prior dominates early and is washed out by margin/time late."""
+    te = test.copy()
+    te["p_core"], te["p_prior"] = p_core, p_prior
+    te["pregame_margin"] = te["d_pts"] - te["d_pts_allowed"]
+
+    opens = te.loc[te.groupby("game_id")["secs_left_game"].idxmax()]
+    late = te[(te["secs_left_game"] < 120) & (te["score_margin"].abs() >= 8)]
+
+    print("\nBlend behaviour:")
+    print(f"  opening-tip P(home) spread (std):  core {opens['p_core'].std():.3f}  "
+          f"-> prior {opens['p_prior'].std():.3f}  (prior should be wider)")
+    print(f"  corr(opening prior-model P, pregame margin diff): "
+          f"{opens[['p_prior', 'pregame_margin']].corr().iloc[0, 1]:.3f}")
+    print(f"  late blowouts (<2min, |margin|>=8) mean |P_prior - P_core|: "
+          f"{(late['p_prior'] - late['p_core']).abs().mean():.4f}  (should be ~0)")
 
 
 def main():
@@ -248,7 +292,7 @@ def main():
     print(f"Building dataset from {len(train_ids)} train + {len(test_ids)} test games...")
     train = build_dataset(train_ids)
     test = build_dataset(test_ids)
-    evaluate(train, test)
+    report_before_after(train, test)
 
 
 if __name__ == "__main__":

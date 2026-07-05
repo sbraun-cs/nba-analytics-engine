@@ -20,31 +20,33 @@ import matplotlib.pyplot as plt
 import streamlit as st
 
 from src.phase3.baseline import (
-    TEST_SEASON, find_demo_game, fmt_clock, game_curve, game_labels,
-    game_teams, leading_scorers, sampled_split, train_model,
+    SCHEMA_VERSION, TEST_SEASON, find_demo_game, fmt_clock, game_curve,
+    game_labels, game_teams, leading_scorers, sampled_split, train_model,
 )
 from src.phase3.viz import plot_winprob
 
 st.set_page_config(page_title="NBA Win Probability Replay", layout="wide")
 
-
+# Every cached function takes `schema_version` so bumping SCHEMA_VERSION (when the
+# parsed-event/curve schema or feature set changes) invalidates the stale cache
+# that a long-running session would otherwise keep serving.
 @st.cache_resource
-def get_model():
+def get_model(schema_version: int = SCHEMA_VERSION):
     return train_model()
 
 
 @st.cache_data
-def get_demo_game():
+def get_demo_game(schema_version: int = SCHEMA_VERSION):
     return find_demo_game(get_model())
 
 
 @st.cache_data
-def get_labels():
+def get_labels(schema_version: int = SCHEMA_VERSION):
     return game_labels(TEST_SEASON)
 
 
 @st.cache_data
-def get_curve(game_id: str):
+def get_curve(game_id: str, schema_version: int = SCHEMA_VERSION):
     return game_curve(get_model(), game_id), game_teams(game_id)
 
 

@@ -45,6 +45,34 @@ PRIOR_SEASONS = TRAIN_SEASONS + [TEST_SEASON]
 PRIOR_FEATURES = ["d_pts", "d_pts_allowed", "d_rest", "d_off_rating", "d_def_rating"]
 ALL_FEATURES = FEATURES + PRIOR_FEATURES
 
+# Bump SCHEMA_VERSION whenever the parsed-event / curve schema or feature set
+# changes. The dashboard threads it into every cached function's key, so a bump
+# invalidates any stale Streamlit cache (v1 core, v2 +display cols, v3 +prior).
+SCHEMA_VERSION = 3
+
+# Columns every game curve must contain -- the model prediction plus the fields
+# the dashboard's chart, feed, and leading-scorer line depend on.
+REQUIRED_CURVE_COLUMNS = [
+    "game_id", "period", "secs_left_period", "minutes_elapsed",
+    "score_home", "score_away", "win_prob",
+    "description", "player_name", "team_tricode", "points",
+]
+
+
+def assert_curve_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Guarantee a curve has every column the dashboard needs; fail fast if not.
+
+    This turns a stale-cache / schema-drift bug into a clear error at the point
+    the curve is built, instead of a cryptic KeyError deep in leading_scorers.
+    """
+    missing = [c for c in REQUIRED_CURVE_COLUMNS if c not in df.columns]
+    if missing:
+        raise KeyError(
+            f"curve is missing required columns {missing} -- stale cache or "
+            f"parser schema drift? (bump SCHEMA_VERSION / clear the cache)"
+        )
+    return df
+
 
 @lru_cache(maxsize=1)
 def prior_table() -> pd.DataFrame:
@@ -133,7 +161,8 @@ def game_curve(model, game_id: str, features: list[str] | None = None) -> pd.Dat
         _elapsed_seconds(p, s) for p, s in zip(df["period"], df["secs_left_period"])
     ]
     df["minutes_elapsed"] = df["secs_elapsed"] / 60.0
-    return df.sort_values("secs_elapsed").reset_index(drop=True)
+    df = df.sort_values("secs_elapsed").reset_index(drop=True)
+    return assert_curve_columns(df)
 
 
 def q4_swing(model, game_id: str) -> float:

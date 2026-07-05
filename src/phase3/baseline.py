@@ -143,6 +143,46 @@ def game_teams(game_id: str) -> tuple[str, str]:
     return home, away
 
 
+def game_labels(season: str) -> dict[str, str]:
+    """game_id -> 'DATE — AWAY @ HOME (away-home)' from the cached game log."""
+    log = league_game_log(season).copy()
+    log["gid"] = log["GAME_ID"].astype(str).str.zfill(10)
+    labels: dict[str, str] = {}
+    for gid, grp in log.groupby("gid"):
+        home = grp[grp["MATCHUP"].str.contains("vs.", regex=False)]
+        away = grp[grp["MATCHUP"].str.contains("@", regex=False)]
+        if home.empty or away.empty:
+            continue
+        h, a = home.iloc[0], away.iloc[0]
+        date = str(h["GAME_DATE"])[:10]
+        labels[gid] = (f"{date} — {a['TEAM_ABBREVIATION']} @ {h['TEAM_ABBREVIATION']} "
+                       f"({int(a['PTS'])}-{int(h['PTS'])})")
+    return labels
+
+
+def leading_scorers(curve: pd.DataFrame, upto: int, home: str, away: str) -> dict:
+    """Top scorer (name, points) for each team using scoring events up to `upto`."""
+    seg = curve.iloc[: max(1, upto)]
+    made = seg[seg["points"] > 0]
+    out = {}
+    for tri in (home, away):
+        t = made[made["team_tricode"] == tri]
+        if t.empty:
+            out[tri] = None
+        else:
+            totals = t.groupby("player_name")["points"].sum()
+            out[tri] = (totals.idxmax(), int(totals.max()))
+    return out
+
+
+def fmt_clock(period: int, secs_left_period: float) -> str:
+    """Format the game clock, e.g. (4, 41.0) -> 'Q4 0:41', (5, 120) -> 'OT 2:00'."""
+    minutes = int(secs_left_period // 60)
+    seconds = int(round(secs_left_period % 60))
+    quarter = "OT" if period > 4 else f"Q{int(period)}"
+    return f"{quarter} {minutes}:{seconds:02d}"
+
+
 def calibration_by_period(test: pd.DataFrame, prob: np.ndarray) -> pd.DataFrame:
     """Mean predicted vs. actual home-win rate, bucketed by period."""
     t = test.copy()

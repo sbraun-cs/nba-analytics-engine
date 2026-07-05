@@ -39,6 +39,11 @@ COLUMN_DOC = {
     "action_type":      "Human-readable event category from the API (e.g. 'Made Shot', 'Rebound', 'Turnover', 'Foul', 'Timeout').",
     "home_event":       "1 if the home team performed the action, 0 if the away team - a possession-side proxy. Neutral non-play events are removed (see NEUTRAL policy).",
     "home_win":         "Label: 1 if the home team won the game (from the final score); constant within a game.",
+    # Display-only (not model features), used by the replay dashboard:
+    "description":      "The API's text description of the event (e.g. 'Tatum 26' 3PT Jump Shot').",
+    "player_name":      "Name of the player involved in the event ('' if none).",
+    "team_tricode":     "Tricode of the acting team (e.g. 'BOS').",
+    "points":           "Points scored on this event (0 for non-scoring events).",
 }
 
 # NEUTRAL-EVENT POLICY (explicit decision, not an accident):
@@ -87,6 +92,15 @@ def parse_game(game_id: str, drop_neutral: bool = True) -> pd.DataFrame:
 
     out["action_type"] = raw["actionType"].fillna("").astype(str)
     out["home_event"] = raw["location"].map({"h": 1, "v": 0})  # NaN for neutral
+
+    # Display-only fields (not model features): used by the replay dashboard's
+    # play-by-play feed and running leading-scorer line.
+    out["description"] = raw["description"].fillna("").astype(str)
+    out["player_name"] = raw["playerName"].fillna("").astype(str)
+    out["team_tricode"] = raw["teamTricode"].fillna("").astype(str)
+    # Points scored on this event = increase in the combined score.
+    total = out["score_home"] + out["score_away"]
+    out["points"] = total.diff().fillna(total.iloc[0]).clip(lower=0).astype(int)
 
     # Label from the final score of the game (computed BEFORE dropping any rows).
     final_home = int(out["score_home"].iloc[-1])

@@ -7,25 +7,34 @@ models of escalating difficulty:
 |-------|-------|--------|
 | 1 | Game outcome predictor (logistic regression) | ✅ Complete |
 | 2 | Shot quality model — xFG% (XGBoost) | ✅ Complete |
-| 3 | Live win-probability model + Streamlit dashboard (PyTorch) | 🔨 In progress (logistic + prior + dashboard) |
+| 3 | Live win-probability model + Streamlit dashboard | ✅ Complete |
 
 All data is pulled from the public `nba_api`, cached locally under `data/` (never
 committed), and every model is evaluated against an honest naive baseline with a
 **time-based** train/test split — no random shuffling, no tuning on the test set.
 
+**Highlight — one engine:** Phase 1's game-level model is reused as a *pregame prior*
+for Phase 3's live win-probability model, so a game no longer starts at a generic
+50/50 but at the strength of the teams playing. See [Phase 3](#phase-3--win-probability-model--dashboard).
+
+![Win probability replay](docs/phase3_winprob_replay.gif)
+
 ## Repo layout
 
 ```
 src/ingest/     shared nba_api access + caching (used by every phase)
-src/phase1/     game predictor
+src/phase1/     game predictor (logistic regression)
+src/phase2/     shot quality / xFG% (XGBoost)
+src/phase3/     win probability (parser, logistic + prior, net, recalibration, dashboard)
 notebooks/      one exploration notebook per phase
+tests/          regression tests
 data/           cached API pulls (gitignored)
 ```
 
 ## Setup
 
 ```bash
-pip install nba_api pandas scikit-learn xgboost seaborn matplotlib jupyter
+pip install nba_api pandas scikit-learn xgboost seaborn matplotlib jupyter streamlit torch scipy
 ```
 
 ## Phase 1 — Game predictor
@@ -160,12 +169,12 @@ red flag.
   the missing defender/shot-clock fields are the real accuracy ceiling, and
   naming that limitation honestly matters more than squeezing out AUC.
 
-## Phase 3 — Win probability model + dashboard (in progress)
+## Phase 3 — Win probability model + dashboard
 
 Predicts P(home win) at each moment of a game from live game state. Built
-incrementally per the brief: the play-by-play **parser is validated on a single
-game first**, and the train/test split is proven leak-free, before any
-season-wide pull or model training.
+incrementally: the play-by-play **parser is validated on a single game first**,
+and the train/test split is proven leak-free, before any season-wide pull or
+model training.
 
 ### Live replay dashboard
 
@@ -176,9 +185,13 @@ curve. The game shown is chosen automatically as the test game with the **bigges
 4th-quarter swing** — here BOS erasing a 90%+ PHI win probability to win 118-110.
 
 ```bash
-streamlit run src/phase3/dashboard.py      # needs cached play-by-play in data/
-python -m src.phase3.make_gif              # regenerate the GIF above
+python -m streamlit run src/phase3/dashboard.py   # needs cached play-by-play in data/
+python -m src.phase3.make_gif                     # regenerate the GIF above
 ```
+
+The dashboard adds a play-by-play feed (scoring plays highlighted) and running
+leading scorers alongside the curve. It needs the cached play-by-play locally, so
+the **GIF above** is what renders on GitHub.
 
 - **Data:** `PlayByPlayV3` (the older `playbyplayv2` is deprecated — the NBA API
   now returns empty JSON for it), fetched and cached one game at a time.
@@ -238,7 +251,79 @@ sees itself.
 - The prior is **washed out late**: in last-2-minute blowouts the core and core+prior
   predictions differ by an average of **0.0006** — margin and time take over.
 
-**Honest caveat:** the prior improves *discrimination* (log loss and AUC) but does
-**not** fix the early-game home over-prediction — Q1 stays ~5 points too home-friendly.
-That bias is an *intercept* problem from the home-advantage decline across seasons, and
-needs recalibration, not a relative-strength prior. Worth doing, but a separate fix.
+**Nuance:** the prior improves *discrimination* (log loss and AUC) but does **not** by
+itself fix the early-game home over-prediction — that's an *intercept* problem from the
+home-advantage decline across seasons, addressed by recalibration below.
+
+### Recalibrating the early-game home bias
+
+The model over-predicts the home team early (Q1 predicts 0.61 vs actual 0.55) because
+home-court advantage was higher in the training seasons than in 2024-25 — an intercept
+issue, not a features issue. Fix: a **single log-odds shift**, fit so the mean prediction
+matches the home-win rate of the most recent *training* season (2023-24, whose home
+advantage already matches the test era). Leak-free (never uses the test set), one
+parameter, and a constant logit shift barely moves the saturated endgame.
+
+| Period | Events | Actual | Predicted (before) | Predicted (after) |
+|--------|-------:|-------:|-------------------:|------------------:|
+| Q1 | 17,434 | 0.547 | 0.607 | **0.554** |
+| Q2 | 18,401 | 0.541 | 0.603 | **0.559** |
+| Q3 | 17,799 | 0.550 | 0.586 | **0.552** |
+| Q4 | 18,150 | 0.541 | 0.554 | **0.535** |
+
+It works: the early-game bias collapses (Q1 from +6 points to +0.7) and overall log loss
+improves 0.4226 → 0.4166, with the endgame untouched.
+
+### Does a neural net beat logistic-plus-prior?
+
+A small PyTorch feed-forward net on the same features and split, early-stopped on a
+game-disjoint validation set:
+
+| Model | Log loss | ROC-AUC |
+|-------|----------|---------|
+| Logistic (core) | 0.454 | 0.860 |
+| **Logistic (core + prior)** | **0.423** | **0.884** |
+| PyTorch net (core + prior) | 0.468 | 0.861 |
+
+**No — and that's the finding.** Unregularized, the net overfits (test log loss diverges
+as it trains); across regularization settings it plateaus near the logistic-*core* level
+and never beats logistic-plus-prior. The win-probability relationship is close to linear
+in log-odds, so a well-regularized logistic model is the right tool — the net adds
+variance without reducing bias. A clean negative result worth more than a forced win.
+
+### Run the rest of Phase 3
+
+```bash
+python -m src.phase3.win_prob      # parse one game + prove the leak-free split
+python -m src.phase3.baseline      # logistic core vs core+prior (before/after)
+python -m src.phase3.recalibrate   # intercept recalibration experiment
+python -m src.phase3.net           # PyTorch net comparison
+python tests/test_phase3_dashboard.py   # regression tests
+```
+
+## What I learned
+
+- **Leakage is a discipline, not a checkbox.** Every phase’s features are strictly
+  past-only (`shift(1)` rolling, whole-game splits, priors from earlier games) and
+  guarded by runtime assertions — because the fastest way to a great-looking, useless
+  model is to let the future leak in.
+- **The naive baseline keeps you honest.** Home-team-wins, league-average FG%, and a
+  constant base rate are in every results table. A model only earns attention by beating
+  them, and a suspiciously large win is a leakage alarm, not a trophy.
+- **Say what the data can’t do.** The shot-chart endpoint has no defender distance or
+  shot clock; PlayByPlayV2 was deprecated mid-project. I documented the limits and used
+  the newer endpoint rather than papering over them.
+- **Simpler often wins.** Rolling win% was redundant with scoring margin; a neural net
+  couldn’t beat a well-regularized logistic model. Both are reported as findings, not
+  buried.
+- **The best idea reused work.** Feeding Phase 1’s game model into Phase 3 as a pregame
+  prior — “one engine” — was the highest-leverage change, improving log loss and AUC and
+  making the win-probability curves start where they should.
+- **A real bug taught real caching.** A live `KeyError` traced to a stale Streamlit cache
+  after a schema change; the fix was cache versioning plus a fail-fast assertion and a
+  regression test — not a defensive patch.
+
+## Tech
+
+Python · pandas · scikit-learn · XGBoost · PyTorch · seaborn/matplotlib · Streamlit ·
+`nba_api`. Data cached locally (never committed); all splits are time-based.

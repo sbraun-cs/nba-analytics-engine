@@ -9,6 +9,7 @@ Run:  python -m streamlit run src/phase3/dashboard.py
 
 from __future__ import annotations
 
+import itertools
 import sys
 import time
 from pathlib import Path
@@ -85,15 +86,22 @@ st.markdown(
 )
 st.caption(f"{m.get('date', '')} · win-probability replay · Phase 3 logistic + prior model")
 
+# Full-width KPI row so long values like "HOU +27" never truncate in a narrow column.
+metrics = st.empty()
+
 left, right = st.columns([3, 2])
 with right:
     idx = st.slider("Replay to event", 1, n, n)
     play = st.button("▶ Play from start")
 
 chart = left.empty()
-metrics = left.empty()
 scorer = left.empty()
 feed = right.empty()
+
+# Every plotly_chart in a run needs a unique key, else the Play loop (many
+# re-renders into one placeholder within a single run) raises
+# StreamlitDuplicateElementId. A per-run counter guarantees uniqueness.
+_chart_keys = itertools.count()
 
 
 def _feed_html(k: int) -> str:
@@ -120,7 +128,8 @@ def _feed_html(k: int) -> str:
 
 
 def render(k: int):
-    chart.plotly_chart(plotly_winprob(curve, k, home, away), width="stretch")
+    chart.plotly_chart(plotly_winprob(curve, k, home, away), width="stretch",
+                       key=f"winprob_{next(_chart_keys)}")
 
     row = curve.iloc[k - 1]
     prev = curve.iloc[k - 2] if k >= 2 else row

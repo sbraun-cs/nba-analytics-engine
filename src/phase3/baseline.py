@@ -199,20 +199,31 @@ def game_teams(game_id: str) -> tuple[str, str]:
     return home, away
 
 
-def game_labels(season: str) -> dict[str, str]:
-    """game_id -> 'DATE — AWAY @ HOME (away-home)' from the cached game log."""
+def game_meta(season: str) -> dict[str, dict]:
+    """game_id -> {date, home, away, home_pts, away_pts} from the cached game log."""
     log = league_game_log(season).copy()
     log["gid"] = log["GAME_ID"].astype(str).str.zfill(10)
-    labels: dict[str, str] = {}
+    meta: dict[str, dict] = {}
     for gid, grp in log.groupby("gid"):
         home = grp[grp["MATCHUP"].str.contains("vs.", regex=False)]
         away = grp[grp["MATCHUP"].str.contains("@", regex=False)]
         if home.empty or away.empty:
             continue
         h, a = home.iloc[0], away.iloc[0]
-        date = str(h["GAME_DATE"])[:10]
-        labels[gid] = (f"{date} — {a['TEAM_ABBREVIATION']} @ {h['TEAM_ABBREVIATION']} "
-                       f"({int(a['PTS'])}-{int(h['PTS'])})")
+        meta[gid] = {
+            "date": str(h["GAME_DATE"])[:10],
+            "home": h["TEAM_ABBREVIATION"], "away": a["TEAM_ABBREVIATION"],
+            "home_pts": int(h["PTS"]), "away_pts": int(a["PTS"]),
+        }
+    return meta
+
+
+def game_labels(season: str, hide_final: bool = True) -> dict[str, str]:
+    """game_id -> 'DATE — AWAY @ HOME' label; append the final score unless hidden."""
+    labels: dict[str, str] = {}
+    for gid, m in game_meta(season).items():
+        base = f"{m['date']} — {m['away']} @ {m['home']}"
+        labels[gid] = base if hide_final else f"{base} ({m['away_pts']}-{m['home_pts']})"
     return labels
 
 

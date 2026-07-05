@@ -1,0 +1,11 @@
+# Committed dark theme for the Phase 3 win-probability dashboard.
+[theme]
+base = "dark"
+primaryColor = "#4c9be8"           # home / accent blue (matches viz.HOME_COLOR)
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1f2b"
+textColor = "#e6e6e6"
+font = "sans serif"
+
+[server]
+headless = true

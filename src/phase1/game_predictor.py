@@ -130,6 +130,8 @@ def build_game_table(seasons: list[str]) -> pd.DataFrame:
     games["target"] = games["home_WIN"]  # 1 if home team won
     games["SEASON_ID"] = games["home_SEASON_ID"]
     games["GAME_DATE"] = games["home_GAME_DATE"]
+    # Zero-padded 10-char game id, so Phase 3 can join these pregame features on it.
+    games["game_id"] = games["home_GAME_ID"].astype(str).str.zfill(10)
 
     # Home-minus-away differences (the model's actual inputs).
     # roll_winpct is still computed upstream (it anchors the leakage guard) but is
@@ -142,7 +144,7 @@ def build_game_table(seasons: list[str]) -> pd.DataFrame:
     games["home_b2b"] = games["home_b2b"]
     games["away_b2b"] = games["away_b2b"]
 
-    model_cols = ["GAME_ID_x", "SEASON_ID", "GAME_DATE", "target",
+    model_cols = ["game_id", "SEASON_ID", "GAME_DATE", "target",
                   "home_TEAM_ABBREVIATION", "away_TEAM_ABBREVIATION"] + \
                  BASE_FEATURES + EXTRA_FEATURES
     out = games[[c for c in model_cols if c in games.columns]].dropna(

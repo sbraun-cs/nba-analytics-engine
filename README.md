@@ -7,7 +7,7 @@ models of escalating difficulty:
 |-------|-------|--------|
 | 1 | Game outcome predictor (logistic regression) | ✅ Complete |
 | 2 | Shot quality model — xFG% (XGBoost) | ✅ Complete |
-| 3 | Live win-probability model + Streamlit dashboard (PyTorch) | 🔨 In progress (baseline + dashboard) |
+| 3 | Live win-probability model + Streamlit dashboard (PyTorch) | 🔨 In progress (logistic + prior + dashboard) |
 
 All data is pulled from the public `nba_api`, cached locally under `data/` (never
 committed), and every model is evaluated against an honest naive baseline with a
@@ -212,13 +212,33 @@ training seasons than in the 2024-25 test season (the same decline documented in
 Phase 1 analysis), so the intercept is too home-friendly early. Conclusion: **bonus
 state, timeouts, and true possession are not worth adding** (the possession proxy
 already contributes ~nothing). What *would* help is a pregame team-strength prior —
-which is exactly the stretch below.
+which is exactly the upgrade below.
 
-### Stretch idea (v2, after the dashboard works): reuse Phase 1 as a prior
+### One engine: reusing Phase 1 as a pregame prior
 
-A pure in-game win-probability model starts *every* game near 50/50, ignoring who
-is playing. The plan is to feed **Phase 1's pregame features** (rolling scoring-
-margin difference, rest) into Phase 3 as prior features, so a strong team vs. a
-weak team opens where it should instead of a coin flip. That turns three separate
-projects into **one engine** — the game-level model becomes the prior for the
-event-level model — which is the whole point of the repo's name.
+A pure in-game model starts *every* game at the same probability, ignoring who is
+playing. So we feed **Phase 1's pregame features** (rolling scoring-margin diff, rest
+advantage, offensive/defensive-rating diffs) into each event row as prior features —
+the game-level model becomes the **prior for the event-level model**, turning three
+projects into one engine. The join is leak-free: Phase 1's features use only games
+*before* each game (rolling `shift(1)` within a team-season), so a game's prior never
+sees itself.
+
+| Model | Log loss | ROC-AUC |
+|-------|----------|---------|
+| Naive baseline (constant base rate) | 0.695 | 0.500 |
+| Core (in-game features only) | 0.454 | 0.860 |
+| **Core + Phase 1 prior** | **0.423** | **0.884** |
+
+**The prior pays rent, and the blend works as intended:**
+- Opening-tip P(home) spread across games goes from **std 0.000 → 0.111** — every game
+  used to start identical; now they open by team strength (opening prediction
+  correlates **0.95** with the pregame margin diff). In the demo game the prior opens
+  PHI at **48%**, correctly favouring the stronger BOS despite PHI being home.
+- The prior is **washed out late**: in last-2-minute blowouts the core and core+prior
+  predictions differ by an average of **0.0006** — margin and time take over.
+
+**Honest caveat:** the prior improves *discrimination* (log loss and AUC) but does
+**not** fix the early-game home over-prediction — Q1 stays ~5 points too home-friendly.
+That bias is an *intercept* problem from the home-advantage decline across seasons, and
+needs recalibration, not a relative-strength prior. Worth doing, but a separate fix.

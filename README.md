@@ -34,7 +34,7 @@ data/           cached API pulls (gitignored)
 ## Setup
 
 ```bash
-pip install nba_api pandas scikit-learn xgboost seaborn matplotlib jupyter streamlit torch scipy
+pip install nba_api pandas scikit-learn xgboost seaborn matplotlib jupyter streamlit plotly torch scipy
 ```
 
 ## Phase 1 — Game predictor

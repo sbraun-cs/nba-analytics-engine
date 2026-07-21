@@ -327,3 +327,25 @@ python tests/test_phase3_dashboard.py   # regression tests
 
 Python · pandas · scikit-learn · XGBoost · PyTorch · seaborn/matplotlib · Streamlit ·
 `nba_api`. Data cached locally (never committed); all splits are time-based.
+
+## Phase 2 extension: twenty years of shot selection
+
+Basketball's biggest strategic shift this century is visible directly in the shot data. Using a local archive of roughly 4.2 million shots across 21 seasons (2004 through 2024), this analysis charts the share of field goal attempts that were threes, mid range jumpers, and shots at the rim, one season at a time.
+
+![Twenty years of NBA shot selection](docs/shot_evolution.png)
+
+The story the data tells:
+
+- **Threes more than doubled**, from 18.7 percent of all attempts in 2004 to 39.5 percent in 2024.
+- **The mid range collapsed**, from 50.0 percent to 30.9 percent, as teams learned that a long two is the least efficient shot on the floor.
+- **Shots at the rim stayed roughly flat** near 30 percent: the rim was always efficient, so there was nothing to correct.
+
+The crossover, where the three point line overtakes the mid range as the more common shot, lands around 2018, which matches the on court eye test of the modern pace and space era. This is the same efficiency logic that Phase 2's shot quality model recovers from geometry: shots at the rim and behind the arc are worth more per attempt than the long two, and two decades of league wide behavior reflect exactly that.
+
+**Run it:**
+
+```bash
+python -m src.phase2.shot_evolution   # reads data/shots_archive/*.csv, writes docs/shot_evolution.png
+```
+
+The archive CSVs are large (hundreds of MB) and are never committed; the script reads them locally from `data/shots_archive/` and only the chart above is checked in.

@@ -205,10 +205,23 @@ def game_meta(season: str) -> dict[str, dict]:
     log["gid"] = log["GAME_ID"].astype(str).str.zfill(10)
     meta: dict[str, dict] = {}
     for gid, grp in log.groupby("gid"):
+        if len(grp) < 2:
+            continue
+        # The home team's row normally reads "HOME vs. AWAY"; the away row reads
+        # "AWAY @ HOME". A few games use "@" on BOTH rows, so fall back to parsing
+        # the matchup string: in "AWAY @ HOME" the team after the @ is home.
         home = grp[grp["MATCHUP"].str.contains("vs.", regex=False)]
         away = grp[grp["MATCHUP"].str.contains("@", regex=False)]
         if home.empty or away.empty:
-            continue
+            # Derive home/away from the "@" matchup: text after "@" is the home team.
+            row0 = grp.iloc[0]
+            mu = str(row0["MATCHUP"])
+            if "@" in mu:
+                home_abbr = mu.split("@")[-1].strip()
+                home = grp[grp["TEAM_ABBREVIATION"] == home_abbr]
+                away = grp[grp["TEAM_ABBREVIATION"] != home_abbr]
+            if home.empty or away.empty:
+                continue
         h, a = home.iloc[0], away.iloc[0]
         meta[gid] = {
             "date": str(h["GAME_DATE"])[:10],

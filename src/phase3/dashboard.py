@@ -78,7 +78,12 @@ def label_for(game_id: str) -> str:
     return base
 
 
-options = [demo_id] + [g for g in test_ids if g != demo_id]
+# Sort games chronologically by date; keep the demo game pinned first as the default.
+_others = sorted(
+    (g for g in test_ids if g != demo_id),
+    key=lambda g: meta.get(g, {}).get("date", ""),
+)
+options = [demo_id] + _others
 game_id = st.selectbox("Game", options=options, format_func=label_for)
 
 curve, (home, away) = get_curve(game_id)
@@ -119,6 +124,9 @@ left, right = st.columns([3, 2])
 with right:
     idx = st.slider("Replay to event", 1, n, n)
     play = st.button("▶ Play from start")
+    speed = st.select_slider(
+        "Replay speed", options=["0.5×", "1×", "2×", "4×"], value="1×",
+    )
 
 chart = left.empty()
 scorer = left.empty()
@@ -197,10 +205,13 @@ def render(k: int):
 
 
 if play:
+    # Base frame delay divided by the chosen speed multiplier.
+    _mult = {"0.5×": 0.5, "1×": 1.0, "2×": 2.0, "4×": 4.0}[speed]
+    delay = 0.03 / _mult
     step = max(1, n // 200)
     for k in range(1, n + 1, step):
         render(k)
-        time.sleep(0.03)
+        time.sleep(delay)
     render(n)
 else:
     render(idx)
